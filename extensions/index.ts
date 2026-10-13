@@ -4,6 +4,7 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { Loader } from "@earendil-works/pi-tui";
 import {
   globalConfigPath,
   parseCap,
@@ -19,6 +20,7 @@ import { matchModels, modelSpec } from "../src/models.ts";
 import { buildDriverTranscript } from "../src/transcript.ts";
 
 const STATUS_KEY = "auto-drive";
+const SPINNER_KEY = "auto-drive-spinner";
 
 enum Command {
   On = "auto-drive-on",
@@ -64,6 +66,15 @@ export default function autoDrive(pi: ExtensionAPI): void {
     return model ?? `driver model ${settings.model} (${settings.modelSource}) not found`;
   };
 
+  /** Shows an animated loader above the editor, matching the built-in "Working" indicator. */
+  const showSpinner = (ctx: ExtensionContext, message: string): void => {
+    ctx.ui.setWidget(SPINNER_KEY, (tui, theme) => {
+      const loader = new Loader(tui, (text) => theme.fg("accent", text), (text) => theme.fg("muted", text), message);
+      // The widget host calls dispose() on removal; stop the animation timer so it does not leak.
+      return Object.assign(loader, { dispose: () => loader.stop() });
+    });
+  };
+
   const drive = async (ctx: ExtensionContext): Promise<void> => {
     if (!enabled || inFlight) return;
     const settings = await loadSettings(ctx.cwd);
@@ -83,7 +94,7 @@ export default function autoDrive(pi: ExtensionAPI): void {
 
     const controller = new AbortController();
     inFlight = controller;
-    ctx.ui.setStatus(STATUS_KEY, `auto-drive ${turnsDriven}/${settings.cap}: asking ${settings.model}...`);
+    showSpinner(ctx, `Auto Driving (turn: ${turnsDriven + 1}, limit: ${settings.cap})`);
     let instruction: string | null | undefined;
     try {
       instruction = await getNextInstruction(ctx, model, transcript, controller.signal);
@@ -93,6 +104,7 @@ export default function autoDrive(pi: ExtensionAPI): void {
       return;
     } finally {
       inFlight = undefined;
+      ctx.ui.setWidget(SPINNER_KEY, undefined);
     }
 
     // Aborted by /auto-drive-off, or superseded by typed input. The next agent_settled drives again.
