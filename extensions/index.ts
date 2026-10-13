@@ -15,6 +15,7 @@ import {
   type ResolvedSettings,
 } from "../src/config.ts";
 import { getNextInstruction } from "../src/driver.ts";
+import { matchModels, modelSpec } from "../src/models.ts";
 import { buildDriverTranscript } from "../src/transcript.ts";
 
 const STATUS_KEY = "auto-drive";
@@ -139,38 +140,43 @@ export default function autoDrive(pi: ExtensionAPI): void {
   });
 
   const modelCompletions = (prefix: string) => {
-    const items = (registry?.getAvailable() ?? [])
-      .map((model) => `${model.provider}/${model.id}`)
-      .filter((spec) => spec.startsWith(prefix))
-      .map((spec) => ({ value: spec, label: spec }));
+    const items = matchModels(registry?.getAvailable() ?? [], prefix).map((model) => ({
+      value: modelSpec(model),
+      label: modelSpec(model),
+      description: model.name,
+    }));
     return items.length > 0 ? items : null;
+  };
+
+  /** Resolves a partial query to one model, asking the user to pick when several match. */
+  const pickModel = async (ctx: ExtensionCommandContext, query: string): Promise<DriverModel | undefined> => {
+    const matches = matchModels(ctx.modelRegistry.getAvailable(), query);
+    if (matches.length <= 1 || !ctx.hasUI) return matches.length === 1 ? matches[0] : undefined;
+    const choice = await ctx.ui.select(`Models matching "${query}"`, matches.map(modelSpec));
+    return matches.find((model) => modelSpec(model) === choice);
   };
 
   const setModel = async (args: string, ctx: ExtensionCommandContext, scope: "global" | "repo"): Promise<void> => {
     const command = scope === "global" ? Command.SetModelGlobal : Command.SetModelRepo;
-    const specText = args.trim();
-    const spec = parseModelSpec(specText);
-    if (!spec) {
-      ctx.ui.notify(`Usage: /${command} <provider/model>`, "error");
+    const query = args.trim();
+    if (!query) {
+      ctx.ui.notify(`Usage: /${command} <model name or provider/model>`, "error");
       return;
     }
-    const model = ctx.modelRegistry.find(spec.provider, spec.modelId);
+    const model = await pickModel(ctx, query);
     if (!model) {
-      ctx.ui.notify(`Model ${specText} not found`, "error");
+      ctx.ui.notify(`No available model matches "${query}"`, "error");
       return;
     }
-    if (!ctx.modelRegistry.hasConfiguredAuth(model)) {
-      ctx.ui.notify(`Model ${specText} has no configured auth`, "error");
-      return;
-    }
+    const spec = modelSpec(model);
     const path = scope === "global" ? globalConfigPath(getAgentDir()) : repoConfigPath(ctx.cwd);
-    await updateConfig(path, { model: specText });
+    await updateConfig(path, { model: spec });
     const override = scope === "repo" ? " Overrides the global model in this repo." : "";
-    ctx.ui.notify(`Auto-drive ${scope} model set to ${specText} (${path}).${override}`, "info");
+    ctx.ui.notify(`Auto-drive ${scope} model set to ${spec} (${path}).${override}`, "info");
   };
 
   pi.registerCommand(Command.SetModelGlobal, {
-    description: "Set the auto-drive model for all repos (provider/model)",
+    description: "Set the auto-drive model for all repos",
     getArgumentCompletions: modelCompletions,
     handler: (args, ctx) => setModel(args, ctx, "global"),
   });
