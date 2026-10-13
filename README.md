@@ -2,6 +2,21 @@
 
 A [pi](https://github.com/earendil-works/pi-coding-agent) extension that drives your session for you. After the agent finishes each run, a second model plays the human and sends the next instruction.
 
+## Quick start
+
+Install the extension:
+
+```bash
+pi install https://github.com/eleqtrizit/pi-auto-drive
+```
+
+Then set a driver model and start auto-drive:
+
+```text
+/set-auto-drive-model-global <provider/model>
+/auto-drive-on
+```
+
 ## How it works
 
 1. When the agent run settles (`agent_settled`), the extension reads the active session context (compaction-aware).
