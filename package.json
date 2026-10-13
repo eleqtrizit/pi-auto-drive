@@ -1,0 +1,41 @@
+{
+  "name": "pi-auto-drive",
+  "version": "0.1.0",
+  "description": "Pi extension: a side model plays the human and drives your session after each agent turn",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/YOUR_USERNAME/pi-auto-drive.git"
+  },
+  "author": "Your Name",
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "main": "extensions/index.ts",
+  "files": [
+    "extensions",
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.0",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.4",
+    "@types/node": "^25.3.3",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "pi": {
+    "extensions": [
+      "extensions/index.ts"
+    ]
+  }
+}
