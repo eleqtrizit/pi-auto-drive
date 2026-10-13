@@ -1,6 +1,6 @@
 {
   "name": "pi-auto-drive",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pi extension: a side model plays the human and drives your session after each agent turn",
   "repository": {
     "type": "git",

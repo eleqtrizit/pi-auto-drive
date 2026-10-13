@@ -1,7 +1,6 @@
 import {
   getAgentDir,
   type ExtensionAPI,
-  type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Loader } from "@earendil-works/pi-tui";
@@ -16,6 +15,7 @@ import {
   type ResolvedSettings,
 } from "../src/config.ts";
 import { getNextInstruction } from "../src/driver.ts";
+import { ModelPicker, orderScopedFirst } from "../src/model-picker.ts";
 import { matchModels, modelSpec } from "../src/models.ts";
 import { buildDriverTranscript } from "../src/transcript.ts";
 
@@ -30,10 +30,12 @@ enum Command {
   SetCap = "set-auto-drive-cap",
 }
 
+type ModelScope = "global" | "repo";
+const MODEL_COMMANDS: Record<ModelScope, Command> = { global: Command.SetModelGlobal, repo: Command.SetModelRepo };
+
 const STOP_HINT = `If you want to stop auto drive, do \`/${Command.Off}\``;
 const CAP_HINT = `Change it with \`/${Command.SetCap} <n>\``;
 
-type ModelRegistry = ExtensionContext["modelRegistry"];
 type DriverModel = NonNullable<ExtensionContext["model"]>;
 
 /** Auto-drive extension: after each settled agent run, a side model plays the human and sends the next instruction. */
@@ -41,7 +43,8 @@ export default function autoDrive(pi: ExtensionAPI): void {
   let enabled = false;
   let turnsDriven = 0;
   let inFlight: AbortController | undefined;
-  let registry: ModelRegistry | undefined;
+  let sessionCtx: ExtensionContext | undefined;
+  let stopWatchingEditor: (() => void) | undefined;
 
   const loadSettings = async (cwd: string): Promise<ResolvedSettings> =>
     resolveSettings(await readConfig(globalConfigPath(getAgentDir())), await readConfig(repoConfigPath(cwd)));
@@ -128,13 +131,17 @@ export default function autoDrive(pi: ExtensionAPI): void {
   };
 
   pi.on("session_start", async (_event, ctx) => {
-    registry = ctx.modelRegistry;
+    sessionCtx = ctx;
+    stopWatchingEditor?.();
+    stopWatchingEditor = ctx.mode === "tui" ? watchEditorForModelCommand(ctx) : undefined;
     enabled = false;
     turnsDriven = 0;
     updateStatus(ctx);
   });
 
   pi.on("session_shutdown", async () => {
+    stopWatchingEditor?.();
+    stopWatchingEditor = undefined;
     enabled = false;
     inFlight?.abort();
   });
@@ -151,33 +158,46 @@ export default function autoDrive(pi: ExtensionAPI): void {
     return { action: "continue" };
   });
 
+  /** Available models with session-scoped models first. */
+  const orderedModels = (ctx: Pick<ExtensionContext, "modelRegistry" | "scopedModels">): DriverModel[] =>
+    orderScopedFirst(
+      ctx.modelRegistry.getAvailable(),
+      ctx.scopedModels.map((scoped) => scoped.model),
+    );
+
   const modelCompletions = (prefix: string) => {
-    const items = matchModels(registry?.getAvailable() ?? [], prefix).map((model) => ({
+    if (!sessionCtx) return null;
+    const items = matchModels(orderedModels(sessionCtx), prefix).map((model) => ({
       value: modelSpec(model),
       label: modelSpec(model),
-      description: model.name,
     }));
     return items.length > 0 ? items : null;
   };
 
-  /** Resolves a partial query to one model, asking the user to pick when several match. */
-  const pickModel = async (ctx: ExtensionCommandContext, query: string): Promise<DriverModel | undefined> => {
-    const matches = matchModels(ctx.modelRegistry.getAvailable(), query);
-    if (matches.length <= 1 || !ctx.hasUI) return matches.length === 1 ? matches[0] : undefined;
-    const choice = await ctx.ui.select(`Models matching "${query}"`, matches.map(modelSpec));
-    return matches.find((model) => modelSpec(model) === choice);
+  /** Opens the searchable model picker. Resolves undefined when cancelled or when no TUI is available. */
+  const openPicker = async (ctx: ExtensionContext, title: string, query = ""): Promise<DriverModel | undefined> => {
+    if (ctx.mode !== "tui") return undefined;
+    const models = orderedModels(ctx);
+    const scopedSpecs = new Set(ctx.scopedModels.map((scoped) => modelSpec(scoped.model)));
+    return ctx.ui.custom<DriverModel | undefined>(
+      (tui, theme, _kb, done) => new ModelPicker(tui, theme, title, models, scopedSpecs, done, query),
+    );
   };
 
-  const setModel = async (args: string, ctx: ExtensionCommandContext, scope: "global" | "repo"): Promise<void> => {
-    const command = scope === "global" ? Command.SetModelGlobal : Command.SetModelRepo;
+  /** Resolves a query to one model. A single match is used directly; otherwise the picker opens. */
+  const pickModel = async (ctx: ExtensionContext, title: string, query: string): Promise<DriverModel | undefined> => {
+    const matches = query ? matchModels(orderedModels(ctx), query) : [];
+    if (matches.length === 1) return matches[0];
+    return openPicker(ctx, title, query);
+  };
+
+  const setModel = async (args: string, ctx: ExtensionContext, scope: ModelScope): Promise<void> => {
+    const command = MODEL_COMMANDS[scope];
     const query = args.trim();
-    if (!query) {
-      ctx.ui.notify(`Usage: /${command} <model name or provider/model>`, "error");
-      return;
-    }
-    const model = await pickModel(ctx, query);
+    const model = await pickModel(ctx, `Auto-drive ${scope} model`, query);
     if (!model) {
-      ctx.ui.notify(`No available model matches "${query}"`, "error");
+      if (ctx.mode !== "tui" && !query) ctx.ui.notify(`Usage: /${command} <model name or provider/model>`, "error");
+      else if (query && ctx.mode !== "tui") ctx.ui.notify(`No single available model matches "${query}"`, "error");
       return;
     }
     const spec = modelSpec(model);
@@ -186,6 +206,22 @@ export default function autoDrive(pi: ExtensionAPI): void {
     const override = scope === "repo" ? " Overrides the global model in this repo." : "";
     ctx.ui.notify(`Auto-drive ${scope} model set to ${spec} (${path}).${override}`, "info");
   };
+
+  /**
+   * Opens the picker as soon as the editor holds exactly `/<set-model-command> ` (typed space or Tab completion).
+   * Runs after the editor has processed the key, so it sees the updated text.
+   */
+  const watchEditorForModelCommand = (ctx: ExtensionContext): (() => void) =>
+    ctx.ui.onTerminalInput(() => {
+      setImmediate(() => {
+        const text = ctx.ui.getEditorText();
+        const scope = (Object.keys(MODEL_COMMANDS) as ModelScope[]).find((key) => text === `/${MODEL_COMMANDS[key]} `);
+        if (!scope) return;
+        ctx.ui.setEditorText("");
+        setModel("", ctx, scope).catch((error: unknown) => ctx.ui.notify(`Set model failed: ${String(error)}`, "error"));
+      });
+      return undefined;
+    });
 
   pi.registerCommand(Command.SetModelGlobal, {
     description: "Set the auto-drive model for all repos",

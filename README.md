@@ -10,10 +10,10 @@ Install the extension:
 pi install https://github.com/eleqtrizit/pi-auto-drive
 ```
 
-Then set a driver model and start auto-drive:
+Then set a driver model and start auto-drive. Typing the set-model command and a space opens a searchable model picker:
 
 ```text
-/set-auto-drive-model-global <provider/model>
+/set-auto-drive-model-global
 /auto-drive-on
 ```
 
@@ -30,9 +30,11 @@ Then set a driver model and start auto-drive:
 |---------|--------|
 | `/auto-drive-on` | Start auto-drive. Shows the model, the turn cap, and how to stop. |
 | `/auto-drive-off` | Stop auto-drive. |
-| `/set-auto-drive-model-global <provider/model>` | Set the driver model for all repos. |
-| `/set-auto-drive-model-repo <provider/model>` | Set the driver model for this repo. Overrides the global model. |
+| `/set-auto-drive-model-global [query]` | Set the driver model for all repos. |
+| `/set-auto-drive-model-repo [query]` | Set the driver model for this repo. Overrides the global model. |
 | `/set-auto-drive-cap <n>` | Set the maximum driven turns per `/auto-drive-on`. Default: 50. |
+
+The model picker opens as soon as you type a set-model command followed by a space. It lists session-scoped models first, then all other available models. Type to filter. A query that matches exactly one model sets it directly.
 
 Auto-drive stops when the driver reports the goal is met, when the cap is reached, or when the driver call fails. Typed input does not stop it: your message runs, and the driver takes over after it.
 
