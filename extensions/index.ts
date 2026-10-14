@@ -214,11 +214,17 @@ export default function autoDrive(pi: ExtensionAPI): void {
   const watchEditorForModelCommand = (ctx: ExtensionContext): (() => void) =>
     ctx.ui.onTerminalInput(() => {
       setImmediate(() => {
-        const text = ctx.ui.getEditorText();
-        const scope = (Object.keys(MODEL_COMMANDS) as ModelScope[]).find((key) => text === `/${MODEL_COMMANDS[key]} `);
-        if (!scope) return;
-        ctx.ui.setEditorText("");
-        setModel("", ctx, scope).catch((error: unknown) => ctx.ui.notify(`Set model failed: ${String(error)}`, "error"));
+        // Session replacement invalidates the captured ctx; the session_start
+        // handler re-registers this watcher on the fresh ctx, so skip stale ticks.
+        try {
+          const text = ctx.ui.getEditorText();
+          const scope = (Object.keys(MODEL_COMMANDS) as ModelScope[]).find((key) => text === `/${MODEL_COMMANDS[key]} `);
+          if (!scope) return;
+          ctx.ui.setEditorText("");
+          setModel("", ctx, scope).catch((error: unknown) => ctx.ui.notify(`Set model failed: ${String(error)}`, "error"));
+        } catch {
+          // Stale ctx after session replacement: this tick is obsolete.
+        }
       });
       return undefined;
     });
